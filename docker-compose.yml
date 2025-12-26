@@ -1,0 +1,20 @@
+services:
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: scraper_basic
+    restart: "no"
+
+  api:
+    build: ./api
+    container_name: scraper-api
+    env_file:
+      - .env
+    environment:
+      - SERPER_API_KEY=${SERPER_API_KEY}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped

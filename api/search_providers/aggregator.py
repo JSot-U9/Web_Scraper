@@ -1,0 +1,157 @@
+# aggregator.py
+# Ruta: /home/deployer/scraper/api/search_providers/aggregator.py
+
+import os
+import re
+from typing import List, Dict
+from urllib.parse import urlparse, urlunparse
+
+import httpx
+import math
+
+SERPER_API_KEY = os.getenv("SERPER_API_KEY")
+SERPER_URL = "https://google.serper.dev/search"
+
+# -------------------------
+# Provider: Serper (async)
+# -------------------------
+async def search_serper(query: str, limit: int = 5) -> List[Dict]:
+    """
+    Llama al endpoint de Serper (google.serper.dev) y devuelve una lista
+    de dicts con keys: title, url, snippet, source
+    """
+    if not SERPER_API_KEY:
+        # No key configured: devolver lista vacía (caller decide fallback)
+        return []
+
+    headers = {
+        "X-API-KEY": SERPER_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+    payload = {"q": query, "num": limit}
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(SERPER_URL, headers=headers, json=payload)
+        r.raise_for_status()
+        data = r.json()
+
+    results: List[Dict] = []
+    for item in data.get("organic", [])[:limit]:
+        results.append({
+            "title": item.get("title") or "",
+            "url": item.get("link") or item.get("url") or "",
+            "snippet": item.get("snippet") or "",
+            "source": "serper"
+        })
+    return results
+
+# -------------------------
+# Utilities: normalize / dedupe / scoring
+# -------------------------
+def normalize_url(raw_url: str) -> str:
+    """
+    Normaliza URL para deduplicación:
+    - Lowercase host
+    - Remove query and fragment
+    - Remove trailing slash except root
+    """
+    if not raw_url:
+        return raw_url or ""
+    try:
+        p = urlparse(raw_url)
+    except Exception:
+        return raw_url.strip()
+
+    scheme = p.scheme or "https"
+    netloc = p.netloc.lower()
+    path = p.path or "/"
+    path = re.sub(r"/{2,}", "/", path)
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+    normalized = urlunparse((scheme, netloc, path, "", "", ""))
+    return normalized
+
+def dedupe_results(results: List[Dict]) -> List[Dict]:
+    """
+    Deduplica por URL normalizada. Mantiene la versión con snippet más largo.
+    """
+    index = {}
+    for r in results:
+        key = normalize_url(r.get("url", ""))
+        existing = index.get(key)
+        if not existing:
+            index[key] = r
+        else:
+            if len((r.get("snippet") or "")) > len((existing.get("snippet") or "")):
+                index[key] = r
+    return list(index.values())
+
+def _term_presence_score(title: str, snippet: str, query: str) -> float:
+    if not query:
+        return 0.0
+    q_terms = [t for t in query.lower().split() if t]
+    text = f"{title} {snippet}".lower()
+    if not text:
+        return 0.0
+    hits = sum(1 for t in q_terms if t in text)
+    return min(1.0, hits / max(1, len(q_terms)))
+
+def _snippet_length_score(snippet: str) -> float:
+    if not snippet:
+        return 0.0
+    return min(1.0, len(snippet) / 200.0)
+
+def _compute_score(item: Dict, query: str) -> float:
+    """
+    Scoring combinado (transparente y ajustable):
+      - term presence: 0.5
+      - source weight: 0.35
+      - snippet length: 0.15
+    """
+    SOURCE_WEIGHTS = {"serper": 1.0}
+    title = item.get("title", "") or ""
+    snippet = item.get("snippet", "") or ""
+    src = (item.get("source") or "").lower()
+
+    term_score = _term_presence_score(title, snippet, query)
+    src_weight = SOURCE_WEIGHTS.get(src, 0.5)
+    snippet_score = _snippet_length_score(snippet)
+
+    raw = (0.5 * term_score) + (0.35 * src_weight) + (0.15 * snippet_score)
+    if not math.isfinite(raw):
+        return 0.0
+    return raw
+
+# -------------------------
+# Aggregate function (public)
+# -------------------------
+async def aggregate_search(query: str, limit: int = 10) -> List[Dict]:
+    """
+    Llama a providers (actualmente solo Serper), normaliza, deduplica,
+    puntúa y retorna hasta `limit` resultados ordenados por score descendente.
+    """
+    results: List[Dict] = []
+
+    # 1) Serper
+    try:
+        serper_res = await search_serper(query, limit)
+        results.extend(serper_res)
+    except Exception:
+        # no interrumpe el flujo completo; se puede loguear si lo deseas
+        pass
+
+    if not results:
+        return []
+
+    # 2) Deduplicar
+    results = dedupe_results(results)
+
+    # 3) Calcular score y ordenar
+    for r in results:
+        r["score"] = _compute_score(r, query)
+
+    results_sorted = sorted(results, key=lambda x: x.get("score", 0.0), reverse=True)
+
+    # 4) Retornar up to `limit`
+    return results_sorted[:limit]
