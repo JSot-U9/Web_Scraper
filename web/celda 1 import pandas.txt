@@ -1,0 +1,328 @@
+# celda 1
+import pandas as pd
+from io import StringIO
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import confusion_matrix, f1_score, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    confusion_matrix,
+    classification_report,
+    precision_score,
+    recall_score,
+    f1_score
+)
+#(no imprime nada)
+
+#celda 2
+train = pd.read_csv('train.csv')
+test_private = pd.read_csv('test_private.csv')
+test_public = pd.read_csv('test_public.csv')
+#(no imprime nada)
+
+#celda 3
+train.columns
+# salida:
+Index(['id', 'nombre', 'apellido', 'DNI', 'año_nacimiento', 'trabajo',
+       'estado_civil', 'educación', 'riesgo_crediticio',
+       'fondos_promedio_anual', 'hipoteca', 'deuda_personal', 'incumplimiento',
+       'contacto', 'fecha', 'duracion', 'campaña', 'p_dias',
+       'contactos_previos', 'p_resultado', 'y'],
+      dtype='object')
+
+#celda 4:
+train_copy = train.copy()
+test_private_copy = test_private.copy()
+test_public_copy = test_public.copy()
+
+#celda 5:
+import pandas as pd
+import numpy as np
+import unicodedata
+
+CURRENT_YEAR = 2025
+
+def normalize_text(s):
+    if pd.isna(s):
+        return 'desconocido'
+    s = str(s).strip().lower()
+    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('utf-8')
+    return s
+
+
+def pre_process(df, columns_to_use, is_train=True):
+
+    # =========================================================
+    # Copia controlada (mantener df_copy)
+    # =========================================================
+    df_copy = df[columns_to_use].copy()
+
+    # =========================================================
+    # LOGICA (integración completa)
+    # =========================================================
+
+    # 1. Eliminar columnas prescindibles / PII
+    drop_cols = ['id', 'nombre', 'apellido', 'dni', 'fecha']
+    df_copy.drop(columns=[c for c in drop_cols if c in df_copy.columns], inplace=True)
+
+    # 2. Edad desde año_nacimiento
+    if 'año_nacimiento' in df_copy.columns:
+        df_copy['edad'] = CURRENT_YEAR - pd.to_numeric(
+            df_copy['año_nacimiento'], errors='coerce'
+        )
+        df_copy.drop(columns=['año_nacimiento'], inplace=True)
+
+    # 3. Trabajo
+    if 'trabajo' in df_copy.columns:
+        df_copy['trabajo'] = df_copy['trabajo'].apply(normalize_text)
+
+        df_copy['trabajo'] = df_copy['trabajo'].replace({
+            'criada(o)': 'criado(a)',
+            'criada': 'criado(a)',
+            'criado': 'criado(a)',
+
+            'desempleado': 'desconocido',
+            'desocupado': 'desconocido',
+            'sin informacion': 'desconocido',
+            'no se sabe': 'desconocido',
+            'no se conoce': 'desconocido',
+
+            'retirado': 'jubilado',
+            'servicio': 'servicios'
+        })
+
+    # 4. Estado civil
+    if 'estado_civil' in df_copy.columns:
+        df_copy['estado_civil'] = df_copy['estado_civil'].apply(normalize_text)
+
+    # 5. Educación
+    if 'educación' in df_copy.columns:
+        df_copy.rename(columns={'educación': 'educacion'}, inplace=True)
+
+    if 'educacion' in df_copy.columns:
+        df_copy['educacion'] = df_copy['educacion'].apply(normalize_text)
+        df_copy['educacion'] = df_copy['educacion'].replace({
+            'primari@': 'primaria',
+            'superios': 'superior',
+            'secundaria': 'secundaria',
+            'sin informacion': 'desconocido',
+            'no se sabe': 'desconocido',
+            'no se conoce': 'desconocido'
+        })
+
+    # 6. Riesgo crediticio
+    if 'riesgo_crediticio' in df_copy.columns:
+        df_copy['riesgo_crediticio'] = df_copy['riesgo_crediticio'].apply(normalize_text)
+
+    # 7. Fondos promedio anual
+    if 'fondos_promedio_anual' in df_copy.columns:
+        df_copy['fondos_promedio_anual'] = pd.to_numeric(
+            df_copy['fondos_promedio_anual'], errors='coerce'
+        )
+
+    # 8. Hipoteca
+    if 'hipoteca' in df_copy.columns:
+        df_copy['hipoteca'] = df_copy['hipoteca'].apply(normalize_text)
+
+    # 9. Deuda personal / incumplimiento
+    if 'deuda_personal' in df_copy.columns:
+        df_copy['deuda_personal'] = df_copy['deuda_personal'].apply(normalize_text)
+
+    if 'incumplimiento' in df_copy.columns:
+        df_copy['incumplimiento'] = df_copy['incumplimiento'].apply(normalize_text)
+
+    # 10. Contacto
+    if 'contacto' in df_copy.columns:
+        df_copy['contacto'] = df_copy['contacto'].apply(normalize_text)
+        df_copy['contacto'] = df_copy['contacto'].replace({
+            'cel': 'telefono',
+            'cell': 'telefono',
+            'celular': 'telefono',
+            'telefono': 'telefono',
+            'tel': 'telefono'
+        })
+
+    # 11. Duración a segundos
+    if 'duracion' in df_copy.columns:
+        df_copy['duracion'] = pd.to_numeric(
+            df_copy['duracion'], errors='coerce'
+        ) * 60
+
+    # 12. p_dias
+    if 'p_dias' in df_copy.columns:
+        df_copy['p_dias'] = df_copy['p_dias'].apply(normalize_text)
+        df_copy['p_dias'] = df_copy['p_dias'].replace({'nunca': -1})
+        df_copy['p_dias'] = pd.to_numeric(df_copy['p_dias'], errors='coerce')
+
+    # 13. Contactos previos
+    if 'contactos_previos' in df_copy.columns:
+        df_copy['contactos_previos'] = pd.to_numeric(
+            df_copy['contactos_previos'], errors='coerce'
+        )
+
+    # 14. Resultado previo
+    if 'p_resultado' in df_copy.columns:
+        df_copy['p_resultado'] = df_copy['p_resultado'].apply(normalize_text)
+        df_copy['p_resultado'] = df_copy['p_resultado'].replace({
+            'desconocido': 'd',
+            'otro': 'd',
+            'o': 'd',
+            'd': 'd',
+            'e': 'e',
+            'exito': 'e',
+            'f': 'f',
+            'fracaso': 'f'
+        })
+
+    # 15. Target
+    if is_train and 'y' in df_copy.columns:
+        df_copy['y'] = df_copy['y'].apply(normalize_text).map({'si': 1, 'no': 0})
+
+    return df_copy
+
+# celda 6:
+train_copy = pre_process(train_copy, train.columns, is_train=True)
+test_private_copy = pre_process(test_private_copy, test_private.columns, is_train=False)
+test_public_copy = pre_process(test_public_copy, test_public.columns, is_train=False)
+
+# celda 7:
+train_copy['y'] = train['y']
+
+# celda 8:
+df = train_copy.copy()
+
+# Eliminar ID
+if 'id' in df.columns:
+    df = df.drop(columns=['id'])
+
+cols_a_codificar = [
+    'trabajo',
+    'estado_civil',
+    'educacion',
+    'riesgo_crediticio',
+    'hipoteca',
+    'deuda_personal',
+    'incumplimiento',
+    'contacto',
+    'p_resultado'
+]
+
+encoders_guardados = {}
+
+for col in cols_a_codificar:
+    if col in df.columns:
+        le = LabelEncoder()
+        df[col] = df[col].astype(str)
+        df[col] = le.fit_transform(df[col])
+        encoders_guardados[col] = le
+
+df['y'] = df['y'].map({'si': 1, 'no': 0})
+
+X = df.drop(columns=['y'])
+y = df['y']
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+rf_model.fit(X_train, y_train)
+
+# Predicciones
+y_pred = rf_model.predict(X_test)
+
+# Matriz de confusión
+cm = confusion_matrix(y_test, y_pred)
+print("Matriz de Confusión:\n", cm)
+
+# Métricas individuales
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+
+print("\nPrecision:", precision)
+print("Recall:", recall)
+print("F1-score:", f1)
+
+# Reporte completo (recomendado)
+print("\nReporte de Clasificación:")
+print(classification_report(y_test, y_pred))
+
+print("Modelo entrenado exitosamente.")
+
+# ==========================================
+# 2. PREDICCIÓN (Nuevo DataFrame sin 'y')
+# ==========================================
+
+# Simulamos nuevos datos (Nota que NO tiene la columna 'y')
+
+# Concatenate the 'id' column from the original test dataframes
+# *before* they were processed and the 'id' column was dropped.
+ids_nuevos = pd.concat([test_private['id'], test_public['id']], ignore_index=True)
+
+df_nuevo = pd.concat([test_private_copy, test_public_copy], ignore_index=True)
+
+# The check for 'id' and dropping it from df_nuevo is no longer needed
+# as df_nuevo is already created from processed dataframes where 'id' was dropped.
+# if 'id' in df_nuevo.columns:
+#     df_nuevo = df_nuevo.drop(columns=['id'])
+
+for col, le in encoders_guardados.items():
+    if col in df_nuevo.columns:
+        df_nuevo[col] = df_nuevo[col].astype(str)
+
+        clases_conocidas = set(le.classes_)
+        df_nuevo[col] = df_nuevo[col].apply(lambda x: x if x in clases_conocidas else le.classes_[0])
+
+        df_nuevo[col] = le.transform(df_nuevo[col])
+
+# Ensure df_nuevo has the same columns as the training data, in the same order
+df_nuevo = df_nuevo[X.columns]
+
+predicciones = rf_model.predict(df_nuevo)
+
+df_resultados = pd.DataFrame({
+    'id': ids_nuevos,
+    'prediccion_clase': predicciones,
+    'prediccion_etiqueta': ['si' if p == 1 else 'no' for p in predicciones]
+})
+
+print("\n--- Predicciones para nuevos datos ---")
+df_resultados
+
+# resultados:
+Matriz de Confusión:
+ [[6269  113]
+ [ 694  158]]
+
+Precision: 0.5830258302583026
+Recall: 0.18544600938967137
+F1-score: 0.28138913624220835
+
+Reporte de Clasificación:
+              precision    recall  f1-score   support
+
+           0       0.90      0.98      0.94      6382
+           1       0.58      0.19      0.28       852
+
+    accuracy                           0.89      7234
+   macro avg       0.74      0.58      0.61      7234
+weighted avg       0.86      0.89      0.86      7234
+
+Modelo entrenado exitosamente.
+
+NOTA: La metrica de clasificacion de la clase 1 en la columna f1-score es la que mas
+nos importa subir, esa tiene que llegar hasta 1:
+
+# celda 9:
+csv_to_kaggle = pd.DataFrame()
+csv_to_kaggle['id'] = df_resultados['id']
+csv_to_kaggle['y'] = df_resultados['prediccion_etiqueta']
+csv_to_kaggle
+
+#celda 10:
+csv_to_kaggle.to_csv('csv_to_kaggle.csv', index=False)
